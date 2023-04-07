@@ -1,15 +1,8 @@
-from aws_cdk import (
-    # Duration,
-    Stack,
-    # aws_sqs as sqs,
-)
-from constructs import Construct
-
 import aws_cdk as cdk_
 import os
 import datetime
-from one_app.sls.utils import utils
-from one_app.sls.dydb.dynamodb import dyndb
+from utils.utils import utils
+from dydb.dynamodb import dyndb
 import aws_cdk.aws_cloudformation as cloudformation
 from aws_cdk import CustomResource
 
@@ -20,21 +13,12 @@ from aws_cdk import (aws_apigateway as apigateway_, Duration,
                      aws_iam as _iam,
                      custom_resources as _cr)
 
-from aws_cdk import (
-    Stack,
-    aws_certificatemanager as acm,
-    aws_route53 as route53,
-    aws_lambda as _lambda,
-    #aws_lambda_python_alpha as lambda_python,
-    aws_route53_targets as targets,
-)
+class ServerlessStack(cdk_.Stack):
 
-class OneAppStack(Stack):
-
-    def __init__(self, scope: Construct, construct_id: str, **kwargs) -> None:
+    def __init__(self, scope: cdk_.App, construct_id: str, **kwargs) -> None:
         super().__init__(scope, construct_id, **kwargs)
 
-        #print("Info: Context: ", self.node.try_get_context("depl_from"))
+        print("Context: ", self.node.try_get_context("depl_from"))
         project_name = self.node.try_get_context("product_name")
         lambda_role = self.node.try_get_context("lambda_role")
         pact_env = self.node.try_get_context("pact_env") 
@@ -42,11 +26,15 @@ class OneAppStack(Stack):
         sls_file = self.node.try_get_context("sls_file")
         depl_from = self.node.try_get_context("depl_from")
         config_file = self.node.try_get_context("config_file")
-        
-        depl_from = 'cdk'
-        config_file = 'config.yml'
-        lambda_role = 'BootstrapLambdaRole'
 
+        if 'sls' in depl_from:
+            depl_from = 'sls'
+            sls_cfg_obj = utils.fn_sls_config_load(sls_dir)
+        else:
+            depl_from = 'cdk' 
+        ## Default.. Check and crrect
+        project_name = "one-app"
+        depl_from = 'cdk'
         rs_dict = {}
         def fn_put_dict(key, value):
             rs_dict[key] = value
@@ -58,13 +46,25 @@ class OneAppStack(Stack):
         
         config = utils.fn_load_config(config_file)
 
+#####
+        #print("deploy from: ", depl_from)
 
-        #print("Info: deployment from cdk")
-        depl_from = "cdk"
-
+        if depl_from == "sls" and not utils.fn_try(config["serverless"], "functions") == 'E':
+            print("deployment from sls")
+        else:
+            print("deployment from cdk")
+            depl_from = "cdk"
+            #print("converting deploy_from from sls to cdk")
             
-        sl = config["serverless"]
-        role_ = utils.fn_cdk_role(self, project_name, lambda_role)
+        if depl_from == "sls":
+            proj = utils.fn_sls_project_load(sls_dir, sls_file)
+            sls_obj = utils.fn_sls_config(sls_cfg_obj, config, proj)
+            sl = sls_obj["serverless"]
+            role_ = utils.fn_sls_role(sls_dir, self)
+            
+        elif depl_from == "cdk":
+            sl = config["serverless"]
+            role_ = utils.fn_cdk_role(self, project_name, lambda_role)
 
         # Load objects
         api_name = sl["name"]
@@ -78,10 +78,62 @@ class OneAppStack(Stack):
         except:
             print("no API Gateway Stage")
 
+        # Create Layer
+        lyr_list = []
+        if not utils.fn_try(sl, "layers") == 'E':
+            for lyr in sl["layers"]:
+                #layer_zip = os.getcwd() + "/" + sls_dir + "/" + sl["layers"][lyr]["package"]["artifact"]
+
+                if depl_from == "sls":
+                    layer_zip = os.getcwd() + "/" + sls_dir + "/" + sl["layers"][lyr]["package"]["artifact"]
+                else:
+                    layer_zip = os.getcwd() + '/'+ sl["layers"][lyr]["package"]["artifact"]
+
+                #print(sl["layers"][lyr])
+                layer = lambda_.LayerVersion(self, sl["layers"][lyr]["name"],
+                    code=lambda_.Code.from_asset(layer_zip),
+                    #compatible_runtimes=[lambda_.Runtime.NODEJS_14_X],
+                    #license="Apache-2.0",
+                    description=sl["layers"][lyr]["description"]
+                )
+                lyr_list.append(layer)
+
         dydb_flag = ""
         if not utils.fn_try(sl, "dynamodb") == 'E':
             dydb_flag = True
 
+        vpc_flag = ""; _subnets = []
+        #print(sl["vpc"])
+        if not utils.fn_try(sl, "vpc") == 'E':
+            vpc_flag = True
+            #print(sl["vpc"]["id"])
+            _VpcID = ec2_.Vpc.from_lookup(self, "VPC", vpc_id=sl["vpc"]["id"], is_default=False)
+
+            # Subnets
+            if not utils.fn_try(sl["vpc"], "subnet") == 'E':
+                sn_obj = (sl["vpc"]["subnet"])
+                for snkey in sn_obj:
+                    
+                    sn = sn_obj[snkey]
+                    #print("Subnet: ", sn["id"])
+                    if not utils.fn_try(sn, "rt") == 'E':
+                        _subnets.append(ec2_.Subnet.from_subnet_attributes(self, snkey, subnet_id=sn["id"],
+                                                                        route_table_id=sn["rt"]
+                                                                    ))                
+                    else:
+                        _subnets.append(ec2_.Subnet.from_subnet_attributes(self, snkey, subnet_id=sn["id"]
+                                                                        #route_table_id=sn["rt"]
+                                                                    )) 
+
+            _sg = ec2_.SecurityGroup(self, "GizmoSG",
+                                vpc=_VpcID,
+                                allow_all_outbound=False
+                                #security_group_name="SecGroup for"
+                                )
+
+            _sg.add_egress_rule(ec2_.Peer.ipv4("0.0.0.0/0"), ec2_.Port.tcp(443))
+            _sg.add_egress_rule(peer=_sg, connection=ec2_.Port.all_traffic())
+            _sg.add_ingress_rule(peer=_sg, connection=ec2_.Port.all_traffic())
 
         # Create domain and API GW 3
         try:
@@ -90,7 +142,6 @@ class OneAppStack(Stack):
             dmn_cert = dmn["certificate"]
             dmn_path=dmn["path"]
             cert = acm_.Certificate.from_certificate_arn(self, "Certificate", dmn_cert)
-            #cert = acm_.Certificate.
 
             deploy_options=apigateway_.StageOptions(
                 logging_level=utils.fn_log_level(stage["loggingLevel"]), # INFO, ERROR, OFF
@@ -100,19 +151,18 @@ class OneAppStack(Stack):
             )
 
             api_gw = apigateway_.RestApi(self, api_name,
-                                # domain_name=apigateway_.DomainNameOptions(
-                                #     domain_name="api.example.com",
-                                #     certificate=certificate,
-                                #     security_policy=apigateway_.SecurityPolicy.TLS_1_2,
-                                #     endpoint_type=apigateway_.EndpointType.EDGE
-                                #                             ),
+                                domain_name=apigateway_.DomainNameOptions(
+                                                            domain_name=dmn_name,
+                                                            base_path=dmn_path,
+                                                            #endpoint_type=utils.fn_endpoint(gw["endpoint"]),
+                                                            certificate=cert),
                                 rest_api_name=api_name,
                                 deploy_options=deploy_options,
                                 endpoint_configuration=utils.fn_endpoint(gw["endpoint"])
                             )
-            cdk_.Tags.of(api_gw).add("test", "exempt")
+            cdk_.Tags.of(api_gw).add("c7n_fed-sec-apigateway-public-restapi", "exempt")
         except:
-            print("Error: no domain")
+            print("no domain")
 
         # Usage Plan
         try:
@@ -148,30 +198,60 @@ class OneAppStack(Stack):
         datex = datetime.datetime.now()
 #        try:
         fns = sl["functions"]
-        #print(fns)
+        print(fns)
         for key in fns:
-            #print("Info: Lambda: ", key)
+            print("Lambda: ", key)
             lambdaObj = fns[key] #["code"]
+            print(lambdaObj["package"])
+            if depl_from == "sls":
+                fn_zip = './' + sls_dir + '/.serverless/' + key + '.zip'
+            else:
+                fn_zip = os.getcwd() + '/'+ lambdaObj["package"]["artifact"]
+                print(fn_zip)
 
-            fn_zip = os.path.dirname(os.path.realpath(__file__)) + '/'+ lambdaObj["package"]["artifact"]
-
-            Fn = lambda_.Function(self, lambdaObj["name"],
-                function_name=lambdaObj["name"],
-                code=lambda_.Code.from_asset(fn_zip),
-                handler=lambdaObj["handler"],
-                runtime=utils.fn_runtime(lambdaObj["runtime"]),
-                memory_size=lambdaObj["memory"],
-                timeout=Duration.seconds(lambdaObj["timeout"]),
-                role=role_,
-                tracing=lambda_.Tracing.ACTIVE,
-                current_version_options=lambda_.VersionOptions(
-                        removal_policy=cdk_.RemovalPolicy.RETAIN,  # retain old versions
-                        retry_attempts=1
+            if vpc_flag:
+                #print("VPC Idenitied and applied")
+                Fn = lambda_.Function(self, lambdaObj["name"],
+                    function_name=lambdaObj["name"],
+                    code=lambda_.Code.from_asset(fn_zip),    #utils.fn_lambda_code(self, meth, fn_zip),
+                    handler=lambdaObj["handler"],
+                    runtime=utils.fn_runtime(lambdaObj["runtime"]),
+                    memory_size=lambdaObj["memory"],
+                    timeout=Duration.seconds(lambdaObj["timeout"]),
+                    role=role_,
+                    layers=lyr_list,
+                    vpc=_VpcID,
+                    vpc_subnets=ec2_.SubnetSelection(subnets=_subnets),
+                    security_groups=[_sg],
+                    tracing=lambda_.Tracing.ACTIVE,
+                    current_version_options=lambda_.VersionOptions(
+                            removal_policy=cdk_.RemovalPolicy.RETAIN,  # retain old versions
+                            retry_attempts=1
                         ),
-                environment={
-                    "CodeVersionString": str(datex)
-                },
-            )
+                    environment={
+                        "CodeVersionString": str(datex)
+                        },
+                    #log_retention=log_.RetentionDays.FIVE_MONTHS
+                )
+            else:
+                Fn = lambda_.Function(self, lambdaObj["name"],
+                    function_name=lambdaObj["name"],
+                    code=lambda_.Code.from_asset(fn_zip),
+                    handler=lambdaObj["handler"],
+                    runtime=utils.fn_runtime(lambdaObj["runtime"]),
+                    memory_size=lambdaObj["memory"],
+                    timeout=Duration.seconds(lambdaObj["timeout"]),
+                    role=role_,
+                    layers=lyr_list,
+                    tracing=lambda_.Tracing.ACTIVE,
+                    current_version_options=lambda_.VersionOptions(
+                            removal_policy=cdk_.RemovalPolicy.RETAIN,  # retain old versions
+                            retry_attempts=1
+                            ),
+                    environment={
+                        "CodeVersionString": str(datex)
+                    },
+                )
 
             #print("Function_Inst: ", Fn)
 
@@ -215,7 +295,7 @@ class OneAppStack(Stack):
                         identity_sources=idsource
                     )
 
-            #print(fns[key]["events"])
+
             try:
                 events = fns[key]["events"]
                 #print(events)
@@ -255,7 +335,7 @@ class OneAppStack(Stack):
                                             #vpc_link=link
                                         )
                                 except:
-                                    print("Info: no request template")
+                                    print("no request template")
                                     lambda_integration = apigateway_.LambdaIntegration(
                                             Fn,
                                             proxy=False,
@@ -300,54 +380,52 @@ class OneAppStack(Stack):
 
             except:
                 print("no events: ", key)
-        # except:
-        #     #print("Oops!", sys.exc_info(), "occurred.")
-        #     print("no functions")
 
-        # if not utils.fn_try(gw['usagePlan'], "id") == 'E':
-        #     usage_plan = gw['usagePlan']["id"]
-        #     #print("Link to existing usage plan: ", usage_plan)
-        #     #lambda_code = ''
-        #     #dir_path = os.path.dirname(os.path.realpath(__file__))
-        #     #print(dir_path + "/" + "lambda_fn.py")
-        #     lambda_path = os.getcwd() + "/lambda/cr/on_event.py" # dir_path + "/" + "lambda_fn.py"
-        #     try:
-        #         with open(lambda_path, mode=r"r") as f:
-        #             lambda_code = f.read()
-        #             # print(lambda_code)
-        #     except OSError:
-        #         print("Unable to read Fn code")
 
-            # _lambda_role = _iam.Role(self, "lambda_role1", role_name="pm-sl-lambda-servicerole",
-            #                         assumed_by=_iam.ServicePrincipal("lambda.amazonaws.com"))
+        if not utils.fn_try(gw['usagePlan'], "id") == 'E':
+            usage_plan = gw['usagePlan']["id"]
 
-            # allow_1 = _iam.PolicyStatement(effect=_iam.Effect.ALLOW,
-            #                            actions=["apigateway:PATCH"],
-            #                            resources=["*"])
-            # _lambda_role.add_to_policy(allow_1)
-            # on_event_lambda = lambda_.Function(self, "Custom_Private_Lambda1",
-            #                             runtime=lambda_.Runtime.PYTHON_3_9,
-            #                             handler="index.handler",
-            #                             code=lambda_.InlineCode(
-            #                                 lambda_code
-            #                             ),
-            #                             role=_lambda_role)
+            lambda_path = os.getcwd() + "/lambda/cr/on_event.py" # dir_path + "/" + "lambda_fn.py"
+            try:
+                with open(lambda_path, mode=r"r") as f:
+                    lambda_code = f.read()
+                    # print(lambda_code)
+            except OSError:
+                print("Unable to read Fn code")
 
-            # provider = _cr.Provider(self, "Provider",
-            #     on_event_handler=on_event_lambda,
-            #     #is_complete_handler=is_complete_lm,  # optional async "waiter"
-            #     #role=_lambda_role
-            # )
+            _lambda_role = _iam.Role(self, "lambda_role1", role_name="pm-sl-lambda-servicerole",
+                                    assumed_by=_iam.ServicePrincipal("lambda.amazonaws.com"))
 
-            # apiStage = api_gw.rest_api_id + ":" + pact_env
-            # cr1_ = CustomResource(self, "custom_resource_usage",
-            #             service_token=provider.service_token,
-            #             properties={'RequestType': 'Create', "usagePlanId" : usage_plan, "apiStage" : apiStage}
-            #             )
+            allow_1 = _iam.PolicyStatement(effect=_iam.Effect.ALLOW,
+                                       actions=["apigateway:PATCH"],
+                                       resources=["*"])
+            _lambda_role.add_to_policy(allow_1)
+            on_event_lambda = lambda_.Function(self, "Custom_Private_Lambda1",
+                                        runtime=lambda_.Runtime.PYTHON_3_9,
+                                        handler="index.handler",
+                                        code=lambda_.InlineCode(
+                                            lambda_code
+                                        ),
+                                        role=_lambda_role)
 
-            # cr1_.node.add_dependency(api_gw)
+            provider = _cr.Provider(self, "Provider",
+                on_event_handler=on_event_lambda,
+                #is_complete_handler=is_complete_lm,  # optional async "waiter"
+                #role=_lambda_role
+            )
+
+            apiStage = api_gw.rest_api_id + ":" + pact_env
+            cr1_ = CustomResource(self, "custom_resource_usage",
+                        service_token=provider.service_token,
+                        properties={'RequestType': 'Create', "usagePlanId" : usage_plan, "apiStage" : apiStage}
+                        )
+
+            cr1_.node.add_dependency(api_gw)
         # Create DynamoDB
         if not utils.fn_try(sl, "dynamodb") == 'E':
             dydb = utils.fn_try(sl, "dynamodb")
             dyndb.fn_table(self, dydb)
+
+
+#####
 

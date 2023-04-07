@@ -1,0 +1,430 @@
+---
+serverless:
+  name: test-pani-sa1
+  domain:
+    name: 1ring-dev.pani.one-app.com
+    certificate: arn:aws:acm:us-east-1:454902750279:certificate/37c61fb0-4fd0-465b-9ffa-ae00efeb37a6
+    path: test # new
+    #create: False
+  apigw:
+    name: test-pani-sa
+    authType: Request
+    identitySource:
+    - Authorization
+    stageOptions:
+      loggingLevel: INFO
+      dataTraceEnabled: True
+    endpoint: REGIONAL
+    usagePlan:
+      id: 244qba
+      name: usageEasy
+      # throttle:
+      #   rateLimit: 0
+      #   burstLimit: 0
+    apiKey:
+      name: Apikey1
+  # layers:
+  #   sample:
+  #     name: sample-layer
+  #     description: Packaging NPM dependency modules in an artifact
+  #     compatibleRuntimes:
+  #       - nodejs14.x
+  #     package:
+  #       artifact: asset/layer.zip
+  # vpc:
+  #   id: vpc-0df2e8710756db197
+  #   subnet:
+  #     sn1: 
+  #       id: subnet-0c68aa2e8cd46c07e
+  #     sn2:
+  #       id: subnet-01cc6c12fe44b2b1b
+  #     sn3:
+  #       id: subnet-04be8b2f3f16317fa
+  functions:
+    # auth-authorizer-sls:
+    #   handler: lambda/auth/authorizer/index.handler
+    #   authorizer:
+    #     type: True
+    #   tags:
+    #     GizmoVersion: '0.1'
+    #   package:
+    #     artifact: "asset/auth-authorizer-sls.zip"
+    #   events: []
+    #   name: sample-gizmo-auth-app-dev-auth-authorizer-sls
+    #   memory: 1024
+    #   timeout: 30
+    #   runtime: nodejs14.x
+    #   vpc: {}
+    #   environment:
+    #     DATABASE_REGION: us-east-1
+    #     URL_PREFIX: auth/v1
+    #     GIZMO_VERSION: '0.1'
+
+
+    pani-sample:
+      handler: index.handler
+      # authorizer:
+      #   type: REQUEST
+      #   name: auth-authorizer-sls
+      tags:
+        GizmoVersion: '0.1'
+      events:
+      - http:
+          path: oneapp/v1/core
+          method: post
+          integration: AWS
+          request:
+            passThrough: WHEN_NO_TEMPLATES
+            template:
+              application/json: "{\"amznTraceId\" : \"$input.params('X-Amzn-Trace-Id')\",
+                \"requestId\" : \"$context.requestId\", \"authorization\" : \"$input.params('Authorization')\",\r\n
+                \   \"username\": $input.json('$.username'),\r\n    \"mdn\": $input.json('$.mdn'),\r\n
+                \   \"password\": $input.json('$.password'),\r\n    \"name\": $input.json('$.name'),\r\n\t\"clientInfo\"
+                : {\r\n\t\t\"appVersion\" : \"$input.params('x-app-version')\",\r\n\t\t\"appName\"
+                : \"$input.params('x-app-name')\",\r\n\t\t\"os\" : \"$input.params('x-user-agent-os')\",
+                \r\n\t\t\"osVersion\": \"$input.params('x-user-agent-os-version')\"\r\n\t}\r\n}\r\n"
+          private: true
+          response:
+            headers:
+              Content-Type: "'application/json'"
+            statusCodes:
+              '200':
+                pattern: ''
+              '400':
+                pattern: ".*400.*"
+                template: |-
+                  #set ($errorMessageObj = $util.parseJson($input.path('$.errorMessage')))
+                  {
+                  "code" : "$errorMessageObj.code",
+                  "reason" : "$errorMessageObj.reason"}
+              '401':
+                pattern: ".*401.*"
+                template: |-
+                  #set ($errorMessageObj = $util.parseJson($input.path('$.errorMessage')))
+                  {
+                  "code" : "$errorMessageObj.code",
+                  "reason" : "$errorMessageObj.reason"}
+      package:
+        artifact: "sls/lambda/sample"
+      name: sample-app
+      memory: 1024
+      timeout: 30
+      runtime: nodejs14.x
+      vpc: {}
+      environment:
+        DATABASE_REGION: us-east-1
+        URL_PREFIX: auth/v1
+        GIZMO_VERSION: '0.1'
+
+
+    # auth-token-post:
+    #   handler: lambda/auth/token/post/index.handler
+    #   tags:
+    #     GizmoVersion: '0.1'
+    #   events:
+    #   - http:
+    #       path: auth/v1/token
+    #       method: post
+    #       integration: AWS
+    #       request:
+    #         passThrough: WHEN_NO_TEMPLATES
+    #         template:
+    #           application/json: "{\"amznTraceId\" : \"$input.params('X-Amzn-Trace-Id')\",
+    #             \"requestId\" : \"$context.requestId\", \r\n    \"username\": $input.json('$.username'),\r\n
+    #             \   \"scopes\": $input.json('$.scopes'),\r\n    \"password\": $input.json('$.password'),\r\n\t\"clientInfo\"
+    #             : {\r\n\t\t\"appVersion\" : \"$input.params('x-app-version')\",\r\n\t\t\"appName\"
+    #             : \"$input.params('x-app-name')\",\r\n\t\t\"os\" : \"$input.params('x-user-agent-os')\",
+    #             \r\n\t\t\"osVersion\": \"$input.params('x-user-agent-os-version')\"\r\n\t}\r\n}\r\n"
+    #       private: true
+    #       response:
+    #         headers:
+    #           Content-Type: "'application/json'"
+    #         statusCodes:
+    #           '200':
+    #             pattern: ''
+    #           '400':
+    #             pattern: ".*400.*"
+    #             template: |-
+    #               #set ($errorMessageObj = $util.parseJson($input.path('$.errorMessage')))
+    #               {
+    #               "code" : "$errorMessageObj.code",
+    #               "reason" : "$errorMessageObj.reason"}
+    #           '404':
+    #             pattern: ".*404.*"
+    #             template: |-
+    #               #set ($errorMessageObj = $util.parseJson($input.path('$.errorMessage')))
+    #               {
+    #               "code" : "$errorMessageObj.code",
+    #               "reason" : "$errorMessageObj.reason"}
+    #   package:
+    #     artifact: "asset/auth-token-post.zip"
+    #   name: sample-gizmo-auth-app-dev-auth-token-post
+    #   memory: 1024
+    #   timeout: 30
+    #   runtime: nodejs14.x
+    #   vpc: {}
+    #   environment:
+    #     DATABASE_REGION: us-east-1
+    #     URL_PREFIX: auth/v1
+    #     GIZMO_VERSION: '0.1'
+
+
+    # auth-users-get:
+    #   handler: lambda/auth/users/get/index.handler
+    #   tags:
+    #     GizmoVersion: '0.1'
+    #   events:
+    #   - http:
+    #       path: auth/v1/users
+    #       method: get
+    #       integration: AWS
+    #       request:
+    #         passThrough: WHEN_NO_TEMPLATES
+    #         template:
+    #           application/json: "{\"amznTraceId\" : \"$input.params('X-Amzn-Trace-Id')\",
+    #             \"requestId\" : \"$context.requestId\", \r\n    \"userId\" : \"$context.authorizer.principalId\",\r\n\t\"clientInfo\"
+    #             : {\r\n\t\t\"appVersion\" : \"$input.params('x-app-version')\",\r\n\t\t\"appName\"
+    #             : \"$input.params('x-app-name')\",\r\n\t\t\"os\" : \"$input.params('x-user-agent-os')\",
+    #             \r\n\t\t\"osVersion\": \"$input.params('x-user-agent-os-version')\"\r\n\t}\r\n}\r\n"
+    #       private: true
+    #       response:
+    #         headers:
+    #           Content-Type: "'application/json'"
+    #         statusCodes:
+    #           '200':
+    #             pattern: ''
+    #           '404':
+    #             pattern: ".*404.*"
+    #             template: |-
+    #               #set ($errorMessageObj = $util.parseJson($input.path('$.errorMessage')))
+    #               {
+    #               "code" : "$errorMessageObj.code",
+    #               "reason" : "$errorMessageObj.reason"}
+    #       authorizer:
+    #         type: REQUEST
+    #         name: auth-authorizer-sls
+    #   package:
+    #     from: asset
+    #     artifact: "asset/auth-users-get.zip"
+    #   name: sample-gizmo-auth-app-dev-auth-users-get
+    #   memory: 1024
+    #   timeout: 30
+    #   runtime: nodejs14.x
+    #   vpc: {}
+    #   environment:
+    #     DATABASE_REGION: us-east-1
+    #     URL_PREFIX: auth/v1
+    #     GIZMO_VERSION: '0.1'
+
+
+    # auth-token-delete:
+    #   handler: lambda/auth/token/delete/index.handler
+    #   tags:
+    #     GizmoVersion: '0.1'
+    #   events:
+    #   - http:
+    #       path: auth/v1/token
+    #       method: delete
+    #       integration: AWS
+    #       request:
+    #         passThrough: WHEN_NO_TEMPLATES
+    #         template:
+    #           application/json: "{\"amznTraceId\" : \"$input.params('X-Amzn-Trace-Id')\",
+    #             \"requestId\" : \"$context.requestId\", \r\n    \"userId\" : \"$context.authorizer.principalId\",\r\n
+    #             \   \"tokenId\" : \"$context.authorizer.tokenId\",\r\n\t\"clientInfo\"
+    #             : {\r\n\t\t\"appVersion\" : \"$input.params('x-app-version')\",\r\n\t\t\"appName\"
+    #             : \"$input.params('x-app-name')\",\r\n\t\t\"os\" : \"$input.params('x-user-agent-os')\",
+    #             \r\n\t\t\"osVersion\": \"$input.params('x-user-agent-os-version')\"\r\n\t}\r\n}\r\n"
+    #       private: true
+    #       response:
+    #         headers:
+    #           Content-Type: "'application/json'"
+    #         statusCodes:
+    #           '200':
+    #             pattern: ''
+    #           '404':
+    #             pattern: ".*404.*"
+    #             template: |-
+    #               #set ($errorMessageObj = $util.parseJson($input.path('$.errorMessage')))
+    #               {
+    #               "code" : "$errorMessageObj.code",
+    #               "reason" : "$errorMessageObj.reason"}
+    #       authorizer:
+    #         type: REQUEST
+    #         name: auth-authorizer-sls
+    #   package:
+    #     artifact: "asset/auth-token-delete.zip"
+    #   name: sample-gizmo-auth-app-dev-auth-token-delete
+    #   memory: 1024
+    #   timeout: 30
+    #   runtime: nodejs14.x
+    #   vpc: {}
+    #   environment:
+    #     DATABASE_REGION: us-east-1
+    #     URL_PREFIX: auth/v1
+    #     GIZMO_VERSION: '0.1'
+
+
+    # auth-users-delete:
+    #    handler: lambda/auth/users/delete/index.handler
+    #    tags:
+    #      GizmoVersion: '0.1'
+    #    events:
+    #    - http:
+    #        path: auth/v1/users
+    #        method: delete
+    #        integration: AWS
+    #        request:
+    #          passThrough: WHEN_NO_TEMPLATES
+    #          template:
+    #            application/json: "{\"amznTraceId\" : \"$input.params('X-Amzn-Trace-Id')\",
+    #              \"requestId\" : \"$context.requestId\", \r\n    \"userId\" : \"$context.authorizer.principalId\",\r\n
+    #              \   \"tokenId\" : \"$context.authorizer.tokenId\",\r\n\t\"clientInfo\"
+    #              : {\r\n\t\t\"appVersion\" : \"$input.params('x-app-version')\",\r\n\t\t\"appName\"
+    #              : \"$input.params('x-app-name')\",\r\n\t\t\"os\" : \"$input.params('x-user-agent-os')\",
+    #              \r\n\t\t\"osVersion\": \"$input.params('x-user-agent-os-version')\"\r\n\t}\r\n}\r\n"
+    #        private: true
+    #        response:
+    #          headers:
+    #            Content-Type: "'application/json'"
+    #          statusCodes:
+    #            '200':
+    #              pattern: ''
+    #            '404':
+    #              pattern: ".*404.*"
+    #              template: |-
+    #                #set ($errorMessageObj = $util.parseJson($input.path('$.errorMessage')))
+    #                {
+    #                "code" : "$errorMessageObj.code",
+    #                "reason" : "$errorMessageObj.reason"}
+    #        authorizer:
+    #          type: REQUEST
+    #          name: auth-authorizer-sls
+    #    package:
+    #      artifact: "asset/auth-users-delete.zip"
+    #    name: sample-gizmo-auth-app-dev-auth-users-delete
+    #    memory: 1024
+    #    timeout: 30
+    #    runtime: nodejs14.x
+    #    vpc: {}
+    #    environment:
+    #      DATABASE_REGION: us-east-1
+    #      URL_PREFIX: auth/v1
+    #      GIZMO_VERSION: '0.1'
+
+
+  # dynamodb:
+  #   config:
+  #     readCapacity: 5
+  #     writeCapacity: 5
+  #     pointInTimeRecovery: False
+  #     autoScaleWriteCapacity:
+  #       minCapacity: 1
+  #       maxCapacity: 10
+  #       targetUtilizationPercent: 75
+  #     autoScaleReadCapacity:
+  #       minCapacity: 1
+  #       maxCapacity: 7
+  #       targetUtilizationPercent: 30
+  #   tables:
+  #     sampleUsers:
+  #       tableName: sample_users_gt
+  #       config:
+  #         readCapacity: 1
+  #         writeCapacity: 10
+  #         pointInTimeRecovery: False
+  #         autoScaleWriteCapacity:
+  #           minCapacity: 1
+  #           maxCapacity: 20
+  #           targetUtilizationPercent: 50
+  #         autoScaleReadCapacity:
+  #           minCapacity: 2
+  #           maxCapacity: 9
+  #           targetUtilizationPercent: 25
+  #       billingMode: PROVISIONED
+  #       replicaRegion:
+  #       - region: us-west-2
+  #       partitionKey:
+  #         name: id
+  #         type: S
+  #       globalSecondaryIndex:
+  #       - indexName: username-index
+  #         keySchema:
+  #           name: username
+  #           type: S
+  #         projectionType: ALL
+  #         autoScaleGsiWriteCapacity:
+  #           minCapacity: 17
+  #           maxCapacity: 18
+  #           targetUtilizationPercent: 51
+  #         autoScaleGsiReadCapacity:
+  #           minCapacity: 4
+  #           maxCapacity: 5
+  #           targetUtilizationPercent: 11
+  #       - indexName: mdn-index
+  #         keySchema:
+  #           name: mdn
+  #           type: S
+  #         projectionType: INCLUDE
+  #         autoScaleGsiWriteCapacity:
+  #           minCapacity: 77
+  #           maxCapacity: 88
+  #           targetUtilizationPercent: 12
+  #         autoScaleGsiReadCapacity:
+  #           minCapacity: 93
+  #           maxCapacity: 95
+  #           targetUtilizationPercent: 13
+  #         nonKeyAttributes:
+  #         - is_blocked
+  #         - name
+  #     sampleTokens:
+  #       tableName: sample_tokens_gt
+  #       billingMode: PROVISIONED
+  #       replicaRegion:
+  #       - region: us-west-2
+  #       partitionKey:
+  #         name: tokenId
+  #         type: S
+  #       sortKey:
+  #         name: userId
+  #         type: S
+  #       globalSecondaryIndex:
+  #       - indexName: userId-index
+  #         keySchema:
+  #           name: userId
+  #           type: S
+  #         projectionType: ALL
+  #     sampleCaregivers:
+  #       tableName: sample_caregivers_gt
+  #       billingMode: PROVISIONED
+  #       replicaRegion:
+  #       - region: us-west-2
+  #       partitionKey:
+  #         name: userId
+  #         type: S
+  #       sortKey:
+  #         name: caregiverId
+  #         type: S
+  #       globalSecondaryIndex:
+  #       - indexName: userId-index
+  #         keySchema:
+  #           name: userId
+  #           type: S
+  #         projectionType: ALL
+  #     sampleChildren:
+  #       tableName: sample_children_gt
+  #       billingMode: PROVISIONED
+  #       replicaRegion:
+  #       - region: us-west-2
+  #       partitionKey:
+  #         name: userId
+  #         type: S
+  #       sortKey:
+  #         name: childId
+  #         type: S
+  #       globalSecondaryIndex:
+  #       - indexName: userId-index
+  #         keySchema:
+  #           name: userId
+  #           type: S
+  #         projectionType: ALL
